@@ -25,3 +25,6 @@ server/.agents
 server/.claude
 server/.windsurf
 server/prisma/generated
+
+.vercel
+.env*
