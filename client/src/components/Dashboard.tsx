@@ -30,9 +30,9 @@ export function Dashboard(props: {
   onRunDiscovery: () => void;
   onSelectLead: (id: string) => void;
   onViewPipeline: () => void;
-  onViewLeads: () => void;
   onViewMeetings: () => void;
   onViewActivity: () => void;
+  onGenerateLeads: () => void;
 }) {
   const { dashboardData, leadsList, meetingsList, agentLogs, loading, userName } = props;
   const kpis = dashboardData?.kpis || {};
@@ -70,10 +70,13 @@ export function Dashboard(props: {
         eyebrow={`${today} · Enterprise Production OS`}
         title={`${greeting}, ${firstName}`}
         subtitle="Here's what's happening with your sales pipeline. Your AI team is researching, qualifying, and reaching out so you can focus on the deals that matter."
-        actions={
+         actions={
           <>
             <Button onClick={props.onRunDiscovery} loading={loading}>
               <Play className="w-4 h-4 fill-current" /> Run Lead Discovery
+            </Button>
+            <Button variant="secondary" onClick={props.onGenerateLeads} className="hidden sm:inline-flex">
+              <Sparkles className="w-4 h-4" /> Generate Targeted Leads
             </Button>
             <Button variant="secondary" onClick={props.onViewPipeline} className="hidden sm:inline-flex">
               View Pipeline <ArrowRight className="w-4 h-4" />
@@ -89,7 +92,7 @@ export function Dashboard(props: {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6 mb-8">
-        <Card title="Top qualified leads" actions={<button onClick={props.onViewLeads} className="text-[12px] font-semibold text-primary hover:text-blue-400 flex items-center gap-1">View all <ArrowUpRight className="w-3.5 h-3.5" /></button>}>
+          <Card title="Top qualified leads" actions={<button onClick={props.onGenerateLeads} className="text-[12px] font-semibold text-primary hover:text-blue-400 flex items-center gap-1">View all leads <ArrowUpRight className="w-3.5 h-3.5" /></button>}>
           {loading && topQualified.length === 0 ? (
             <div className="space-y-3">
               {[0, 1, 2].map((i) => <div key={i} className="flex items-center gap-4 p-3"><Skeleton className="h-5 w-40" /><Skeleton className="h-3 w-24" /></div>)}

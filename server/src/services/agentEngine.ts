@@ -6,6 +6,7 @@ import { sendEmail, email as emailProvider } from '../providers/email';
 import { createMeetingLink } from '../providers/calendar';
 import { sendWhatsApp, whatsapp } from '../providers/whatsapp';
 import { retrieveChunks, embedText } from '../providers/vector';
+import { maps, checkWebsite as checkWebsiteFn, extractGmailFromEmail, PlaceResult, WebsiteCheckResult } from '../providers/maps';
 import { logActivity } from '../lib/activity';
 
 dotenv.config();
@@ -189,13 +190,18 @@ export async function updateAgentRun(
 
 // ---------- 1. Company Knowledge Ingestion (RAG) ----------
 
-export async function extractCompanyStructured(name: string, rawText: string) {
-  const systemPrompt = `You are a B2B Sales Intelligence Knowledge Extraction Agent. Analyze the provided company profile and extract factual grounding data for downstream sales automation. Only use facts present in the text. If a category has no evidence in the text, return an empty array.
-Return strict JSON:
+const EXTRACTION_SYSTEM_PROMPT = `You are a B2B Sales Intelligence Knowledge Extraction Agent. Analyze the provided company text and extract factual grounding data for downstream sales automation.
+STRICT RULES:
+- Use ONLY facts explicitly present in the text. Never invent, guess, or hallucinate facts, names, URLs, or metrics.
+- For a category with no evidence in the text, return an empty array [].
+- Keep list items short (1-2 phrases each), extracted verbatim where possible.
+- "summary": a 2-3 sentence factual overview based only on the text.
+- "tagline": the company's actual tagline if present in the text, otherwise an empty string.
+Return strict JSON (no markdown fences):
 {
-  "summary": "2-3 sentence overview based strictly on text",
-  "tagline": "Authoritative brand tagline",
-  "offerings": ["3-5 core capabilities or services offered"],
+  "summary": "...",
+  "tagline": "...",
+  "offerings": ["core capabilities or services offered"],
   "targetIndustries": ["target market verticals"],
   "caseStudies": ["tangible value proof points or metrics"],
   "pricing": ["pricing models or starting tiers"],
@@ -203,24 +209,111 @@ Return strict JSON:
   "limitations": ["prerequisites, boundary conditions, or constraints"]
 }`;
 
-  let extracted = await executeLLM(systemPrompt, `Company Name: ${name}\nCompany Profile:\n${rawText}`, true);
+const SIMPLE_EXTRACTION_PROMPT = `You are a sales intelligence extraction agent. From the company text below, extract ONLY facts present in it into JSON with keys: summary, tagline, offerings, targetIndustries, caseStudies, pricing, techStack, limitations (all arrays of strings, empty [] if no evidence). Never invent facts. Return strict JSON only.`;
 
-  if (!extracted || !extracted.offerings) {
-    const sentences = rawText.split('.').filter((s: string) => s.trim().length > 0);
-    extracted = {
-      summary:
-        sentences.length > 0 ? sentences.slice(0, 2).join('. ') + '.' : `${name} — company knowledge source processed.`,
-      tagline: name,
-      offerings: [],
-      targetIndustries: [],
-      caseStudies: [],
-      pricing: [],
-      techStack: [],
-      limitations: []
-    };
+export function normalizeExtractedArrays(value: any): string[] {
+  return Array.isArray(value) ? value.filter((x: any) => typeof x === 'string' && x.trim().length > 0).map((x: string) => x.trim()) : [];
+}
+
+function splitExtractionSegments(rawText: string, maxLen = 12000): string[] {
+  const text = rawText.trim();
+  if (!text) return [];
+  if (text.length <= maxLen) return [text];
+
+  const segments: string[] = [];
+  const parts = text.split(/\n{2,}/);
+  let current = '';
+  for (const part of parts) {
+    if (current.length > 0 && current.length + part.length + 2 > maxLen) {
+      segments.push(current);
+      current = part;
+    } else {
+      current = current ? `${current}\n\n${part}` : part;
+    }
+  }
+  if (current.length > 0) segments.push(current);
+
+  return segments.flatMap((s) => {
+    if (s.length <= maxLen) return [s];
+    const out: string[] = [];
+    for (let i = 0; i < s.length; i += maxLen) out.push(s.slice(i, i + maxLen));
+    return out;
+  });
+}
+
+function mergeExtractedParts(parts: any[], name: string): any {
+  const merged: any = {
+    summary: '',
+    tagline: '',
+    offerings: [],
+    targetIndustries: [],
+    caseStudies: [],
+    pricing: [],
+    techStack: [],
+    limitations: []
+  };
+  for (const p of parts) {
+    if (!p) continue;
+    if (!merged.summary && typeof p.summary === 'string' && p.summary.trim()) merged.summary = p.summary.trim();
+    if (!merged.tagline && typeof p.tagline === 'string' && p.tagline.trim()) merged.tagline = p.tagline.trim();
+    for (const key of ['offerings', 'targetIndustries', 'caseStudies', 'pricing', 'techStack', 'limitations']) {
+      merged[key] = merged[key].concat(normalizeExtractedArrays(p[key]));
+    }
+  }
+  for (const key of ['offerings', 'targetIndustries', 'caseStudies', 'pricing', 'techStack', 'limitations']) {
+    const seen = new Set<string>();
+    merged[key] = merged[key]
+      .filter((item: string) => {
+        const k = item.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(0, 12);
+  }
+  if (!merged.summary) merged.summary = `${name} — company knowledge source processed.`;
+  return merged;
+}
+
+function fallbackExtracted(name: string, rawText: string): any {
+  const sentences = rawText.split('.').filter((s: string) => s.trim().length > 0);
+  return {
+    summary:
+      sentences.length > 0 ? sentences.slice(0, 2).join('. ') + '.' : `${name} — company knowledge source processed.`,
+    tagline: name,
+    offerings: [],
+    targetIndustries: [],
+    caseStudies: [],
+    pricing: [],
+    techStack: [],
+    limitations: []
+  };
+}
+
+export async function extractCompanyStructured(name: string, rawText: string, timeoutMs = 45000) {
+  const segments = splitExtractionSegments(rawText);
+  const parts: any[] = [];
+
+  for (const segment of segments) {
+    let extracted = await executeLLM(
+      EXTRACTION_SYSTEM_PROMPT,
+      `Company Name: ${name}\nCompany Profile:\n${segment}`,
+      true,
+      timeoutMs
+    );
+    if (!extracted || !extracted.offerings) {
+      extracted = await executeLLM(
+        SIMPLE_EXTRACTION_PROMPT,
+        `Company Name: ${name}\nCompany Profile:\n${segment}`,
+        true,
+        timeoutMs
+      );
+    }
+    if (extracted && extracted.offerings) parts.push(extracted);
   }
 
-  return extracted;
+  if (parts.length === 0) return fallbackExtracted(name, rawText);
+  return mergeExtractedParts(parts, name);
 }
 
 export async function ingestCompanyKnowledge(
@@ -1489,6 +1582,340 @@ export async function runDemoWorkflow(workspaceId: string) {
   push({ step: 'reply', ...reply });
 
   return { steps, leadId: target.id };
+}
+
+// ---------- 12. Lead Generation with Google Maps ----------
+
+export interface LeadGenOptions {
+  serviceOffered: string;
+  businessCategory: string;
+  location: string;
+  maxResults?: number;
+}
+
+export interface GeneratedLead {
+  id: string;
+  name: string;
+  website: string;
+  industry: string;
+  location: string;
+  size: string;
+  stage: string;
+  confidence_score: number;
+  score_explanation: string;
+  recommended_service: string | null;
+  contact_email: string | null;
+  has_gmail: boolean;
+  website_check: WebsiteCheckResult | null;
+  lead_quality: 'hot' | 'warm' | 'medium' | 'cold';
+  pitches: Array<{ id: string; pitch: string; subject: string }>;
+  google_maps_link: string | null;
+  rating: number | null;
+  place_id: string | null;
+  description: string;
+  userRatingsTotal?: number;
+}
+
+function determineLeadQuality(score: number, rating: number | null, hasWebsite: boolean, hasGmail: boolean): 'hot' | 'warm' | 'medium' | 'cold' {
+  let qualityScore = score;
+  if (rating && rating >= 4) qualityScore += 10;
+  if (hasWebsite) qualityScore += 5;
+  if (hasGmail) qualityScore += 5;
+
+  if (qualityScore >= 75) return 'hot';
+  if (qualityScore >= 60) return 'warm';
+  if (qualityScore >= 40) return 'medium';
+  return 'cold';
+}
+
+async function generatePitchForLead(lead: any, serviceOffered: string, companyProfile: any, evidenceRows: any[]): Promise<{ subject: string; pitch: string }> {
+  const evidenceText = evidenceRows.slice(0, 2).map((e) => e.snippet).join(' ');
+  const problemSignal = evidenceText || `Operating in ${lead.industry} in ${lead.location}`;
+
+  if (llmHasProvider()) {
+    const prompt = `Write a concise 2-3 sentence cold outreach pitch from ${companyProfile?.name || 'our company'} to a decision maker at ${lead.name} (${lead.industry} in ${lead.location}). 
+The prospect offers: ${lead.name}'s services in ${lead.industry}.
+Our service is: ${serviceOffered}.
+Observed signals: ${problemSignal}
+Do not fabricate facts. Return JSON: {"subject":"...","pitch":"..."}`;
+
+    const result = await executeLLM(
+      'You are a concise sales copywriter. Write personalized cold email pitches that reference real signals. Return only valid JSON.',
+      prompt,
+      true,
+      30000
+    );
+
+    if (result?.subject && result?.pitch) {
+      return { subject: result.subject, pitch: result.pitch };
+    }
+  }
+
+  const fallbackSubject = `${serviceOffered} for ${lead.name}?`;
+  const fallbackPitch = `Hi there,\n\nI noticed ${lead.name} is a ${lead.industry} business in ${lead.location}. We help companies like yours with ${serviceOffered} to reduce operational overhead and improve efficiency.\n\nWould you be open to a 10-minute chat about how we could help ${lead.name} streamline operations?\n\nBest regards,\n${companyProfile?.name || 'AgentHack Sales'}`;
+
+  return { subject: fallbackSubject, pitch: fallbackPitch };
+}
+
+export async function generateLeads(
+  opts: LeadGenOptions,
+  workspaceId: string
+): Promise<{ leads: GeneratedLead[]; totalGenerated: number; source: string; websiteChecks: number }> {
+  const { serviceOffered, businessCategory, location, maxResults = 20 } = opts;
+  const run = await startAgentRun({
+    workspaceId,
+    workflow: 'lead-generation',
+    currentState: 'sourcing',
+    inputSnapshot: opts,
+  });
+
+  let places: PlaceResult[] = [];
+  let source = 'demo';
+
+  // Try real Google Maps Places API first
+  if (maps.hasProvider) {
+    const searchResults = await maps.searchPlaces(businessCategory, location, maxResults);
+    if (searchResults && searchResults.length > 0) {
+      // Filter by exact location match
+      const locLower = location.toLowerCase();
+      places = searchResults.filter(p => {
+        const placeLocLower = (p.location || '').toLowerCase();
+        return placeLocLower.includes(locLower) || placeLocLower.includes(location);
+      });
+      if (places.length > 0) {
+        source = 'google-maps';
+      }
+    }
+  }
+
+  // Fallback to demo data if no API key or no results
+  if (places.length === 0) {
+    places = generateDemoPlaces(businessCategory, location, maxResults);
+    source = 'demo';
+  }
+
+  const profile = await getLatestProfile(workspaceId);
+  const leads: GeneratedLead[] = [];
+  let websiteChecks = 0;
+  const locLower = location.toLowerCase();
+
+  for (const place of places) {
+    // Strict location filtering: only include leads that match the exact location
+    const placeLocLower = (place.location || '').toLowerCase();
+    if (!placeLocLower.includes(locLower) && !placeLocLower.includes(location.toLowerCase())) {
+      continue;
+    }
+
+    const website = place.website || '';
+    const hasRealWebsite = Boolean(website) && !website.includes('google.com/maps');
+    const googleMapsLink = place.googleMapsUri || `https://www.google.com/maps/place/?q=place_id:${place.placeId}`;
+
+    // Only include leads with a real website (working or not - we'll check it)
+    if (!hasRealWebsite) {
+      continue;
+    }
+
+    let contactEmail: string | null = null;
+    let hasGmail = false;
+
+    // Check website errors - only for real websites
+    let websiteCheck: WebsiteCheckResult | null = null;
+    if (hasRealWebsite) {
+      websiteCheck = await checkWebsiteFn(website);
+      websiteChecks++;
+    }
+
+    // Compute a lead score
+    let score = 50;
+    let scoreFactors: string[] = [];
+
+    if (place.rating && place.rating >= 4) {
+      score += 15;
+      scoreFactors.push(`High rating (${place.rating})`);
+    }
+    if (place.rating && place.rating >= 3) {
+      score += 5;
+      scoreFactors.push(`Good rating (${place.rating})`);
+    }
+    if (hasRealWebsite) {
+      score += 10;
+      scoreFactors.push('Has website');
+    }
+    if (websiteCheck?.reachable) {
+      score += 5;
+      scoreFactors.push('Website reachable');
+    }
+    if (websiteCheck?.hasHttpError) {
+      score += 10;
+      scoreFactors.push('Website has errors (opportunity)');
+    }
+    if (place.userRatingsTotal && place.userRatingsTotal > 10) {
+      score += 5;
+      scoreFactors.push(`Popular (${place.userRatingsTotal} reviews)`);
+    }
+
+    score = Math.min(99, Math.max(5, score));
+
+    // Generate initial evidence for this lead
+    const evidenceRows: any[] = [];
+    if (websiteCheck && websiteCheck.hasHttpError) {
+      evidenceRows.push({
+        title: 'Website Error Detected',
+        snippet: `${place.name}'s website appears to have errors: ${websiteCheck.error || 'HTTP error'}`,
+        source: 'website_check',
+      });
+    }
+    if (place.rating && place.rating >= 4) {
+      evidenceRows.push({
+        title: 'Customer Reviews',
+        snippet: `${place.name} has ${(place.userRatingsTotal || 0)} reviews with a rating of ${place.rating}/5`,
+        source: 'google_maps',
+      });
+    }
+
+    // Generate company description from evidence
+    let companyDescription = '';
+    if (place.address) companyDescription += `${place.name} is located at ${place.address}. `;
+    if (place.rating) companyDescription += `It has a ${place.rating}/5 rating with ${(place.userRatingsTotal || 0)} reviews. `;
+    if (place.types && place.types.length > 0) companyDescription += `This is a ${place.types.join(', ')} business. `;
+    if (websiteCheck?.title) companyDescription += `${websiteCheck.title} is their online presence. `;
+
+    // Generate pitch
+    const pitchData = await generatePitchForLead(place, serviceOffered, profile, evidenceRows);
+    const pitches = [{
+      id: `pitch_${place.placeId || place.name}`,
+      subject: pitchData.subject,
+      pitch: pitchData.pitch,
+    }];
+
+    const quality = determineLeadQuality(score, place.rating || null, hasRealWebsite, hasGmail);
+
+    // Save to database    // Save to database
+    const leadRes = await query(
+      `INSERT INTO leads (
+        icp_id, name, website, industry, location, size, stage,
+        confidence_score, score_explanation, recommended_service,
+        service_rationale, do_not_contact, workspace_id,
+        place_id, website_check, contact_email, has_gmail,
+        lead_quality, lead_pitches
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12, $13, $14, $15, $16, $17, $18)
+      RETURNING *`,
+      [
+        null, // icp_id
+        place.name,
+        website,
+        businessCategory,
+        place.location,
+        place.types && place.types.length > 0 ? `${place.types[0]} business` : 'Business',
+        quality === 'hot' ? 'Potential' : quality === 'warm' ? 'Potential' : 'Not Qualified',
+        score,
+        scoreFactors.join('; ') || `Score based on ${quality} quality indicators.`,
+        serviceOffered,
+        `Lead sourced from ${source}. Quality: ${quality}. ${companyDescription}`,
+        workspaceId,
+        place.placeId,
+        websiteCheck ? JSON.stringify(websiteCheck) : null,
+        contactEmail,
+        hasGmail,
+        quality,
+        JSON.stringify(pitches),
+      ]
+    );
+
+    const row = leadRes.rows[0];
+    leads.push({
+      id: row.id,
+      name: place.name,
+      website: website,
+      industry: businessCategory,
+      location: place.location,
+      size: `${place.types && place.types.length > 0 ? place.types[0] : 'Business'}`,
+      stage: row.stage,
+      confidence_score: score,
+      score_explanation: row.score_explanation,
+      recommended_service: serviceOffered,
+      contact_email: contactEmail,
+      has_gmail: hasGmail,
+      website_check: websiteCheck,
+      lead_quality: quality,
+      pitches,
+      google_maps_link: place.googleMapsUri || `https://www.google.com/maps/place/?q=place_id:${place.placeId}`,
+      rating: place.rating || null,
+      place_id: place.placeId,
+      description: companyDescription,
+      userRatingsTotal: place.userRatingsTotal,
+    });
+  }
+
+  await updateAgentRun(run.id, {
+    currentState: 'complete',
+    decision: `Generated ${leads.length} leads from ${source}. ${websiteChecks} website checks performed.`,
+    confidence: 85,
+    nextAction: 'Review leads and begin research/outreach.',
+    status: 'completed',
+  });
+
+  await logActivity({
+    agent: 'Lead Generation',
+    step: 'Lead Sourcing',
+    tool: 'search_google_maps()',
+    inputData: `service=${serviceOffered}, category=${businessCategory}, location=${location}`,
+    outputData: `leads=${leads.length}, source=${source}`,
+    decision: `Found ${leads.length} leads via ${source}. Hot: ${leads.filter(l => l.lead_quality === 'hot').length}, Warm: ${leads.filter(l => l.lead_quality === 'warm').length}, Medium: ${leads.filter(l => l.lead_quality === 'medium').length}, Cold: ${leads.filter(l => l.lead_quality === 'cold').length}.`,
+    workspaceId,
+  });
+
+  return { leads, totalGenerated: leads.length, source, websiteChecks };
+}
+
+function generateDemoPlaces(businessCategory: string, location: string, maxResults: number): PlaceResult[] {
+  const places: PlaceResult[] = [];
+  const categories = businessCategory.toLowerCase();
+
+  // Generic business names that work for any category and location
+  const genericNames = [
+    `${location} ${businessCategory} 1`,
+    `${location} ${businessCategory} 2`,
+    `${location} ${businessCategory} 3`,
+    `${location} Premier ${businessCategory}`,
+    `${location} Elite ${businessCategory}`,
+    `${location} Prime ${businessCategory}`,
+    `${location} ${businessCategory} Solutions`,
+    `${location} ${businessCategory} Group`,
+    `${location} ${businessCategory} Pros`,
+    `${location} Trusted ${businessCategory}`,
+  ];
+
+  // Generate working demo websites (using a pattern that works for demos)
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const domain = slug(`${location}-${businessCategory}`.replace(/\s+/g, '-'));
+
+  genericNames.slice(0, maxResults).forEach((name: string, i: number) => {
+    const isDental = categories.includes('dental') || categories.includes('dentist');
+    const rating = isDental ? [4.5, 4.2, 3.9, 4.7, 4.1, 3.6, 4.3, 3.8][i % 8] : 3.5 + Math.random() * 1.5;
+    const reviews = isDental ? [128, 89, 56, 210, 74, 42, 93, 35][i % 8] : Math.floor(Math.random() * 200) + 10;
+    const types = isDental ? ['dentist'] : [categories.split(' ')[0] || 'business'];
+
+    // Generate a website URL - using placekitten for demo images, but for website we use a working URL
+    // In demo mode, we'll use a URL that looks real but we know it won't be reachable
+    const website = `https://${slug(name)}.com`;
+
+    places.push({
+      placeId: `demo_${slug(name)}`,
+      name,
+      address: location,
+      location: location,
+      website,
+      phoneNumber: '+1-555-0000',
+      businessStatus: 'OPERATIONAL',
+      rating: Math.round(rating * 10) / 10,
+      userRatingsTotal: reviews,
+      types: types,
+      googleMapsUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name + ' ' + location)}`,
+    });
+  });
+
+  return places;
 }
 
 // ---------- Scheduler helpers (used by server) ----------

@@ -25,6 +25,7 @@ import {
   movePipelineStage,
   setDoNotContact,
   runDemoWorkflow,
+  generateLeads,
   PIPELINE_STAGES,
   NEGATIVE_STAGES
 } from './services/agentEngine';
@@ -32,7 +33,8 @@ import {
   processPdfUpload,
   reprocessDocument,
   deleteDocument,
-  askCompanyKnowledge
+  askCompanyKnowledge,
+  searchCompany
 } from './services/knowledgePipeline';
 
 dotenv.config();
@@ -40,7 +42,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors({ origin: '*', credentials: true }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -54,9 +56,19 @@ interface AuthedRequest extends Request {
 async function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+
+  // If no token, use default workspace (demo mode)
   if (!token) {
-    return res.status(401).json({ error: 'Unauthorized: missing session token.' });
+    const defaultWs = await query(`SELECT id FROM workspaces LIMIT 1`);
+    if (defaultWs.rows[0]) {
+      req.workspaceId = defaultWs.rows[0].id;
+      req.userId = 'demo';
+      req.role = 'admin';
+      return next();
+    }
+    return res.status(500).json({ error: 'No workspace configured.' });
   }
+
   try {
     const result = await query(
       `SELECT s.token, s.expires_at, s.user_id, s.workspace_id, u.email, u.name, u.role
@@ -148,31 +160,6 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/demo-login', async (_req, res) => {
-  try {
-    const email = process.env.ADMIN_EMAIL || 'admin@agenthack.ai';
-    const userRes = await query(`SELECT * FROM users WHERE email = $1`, [email]);
-    const user = userRes.rows[0];
-    if (!user) return res.status(401).json({ error: 'Demo admin user not seeded.' });
-    const memberRes = await query(`SELECT workspace_id, role FROM workspace_members WHERE user_id = $1 LIMIT 1`, [user.id]);
-    const member = memberRes.rows[0];
-    const token = generateSessionToken();
-    const expires = new Date(Date.now() + 7 * 24 * 3600 * 1000);
-    await query(
-      `INSERT INTO sessions (token, user_id, workspace_id, expires_at) VALUES ($1, $2, $3, $4)`,
-      [token, user.id, member.workspace_id, expires]
-    );
-    const wsRes = await query(`SELECT * FROM workspaces WHERE id = $1`, [member.workspace_id]);
-    res.json({
-      token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      workspace: wsRes.rows[0]
-    });
-  } catch (e) {
-    handleError(res, e);
-  }
-});
-
 app.post('/api/auth/logout', authMiddleware, async (req: AuthedRequest, res) => {
   const token = (req.headers.authorization || '').slice(7);
   await query(`DELETE FROM sessions WHERE token = $1`, [token]);
@@ -226,6 +213,22 @@ app.get('/api/company', authMiddleware, async (req: AuthedRequest, res) => {
       chunks = c.rows[0];
     }
     res.json({ ...profile, chunk_count: chunks.count || 0 });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+app.post('/api/company/search', authMiddleware, async (req: AuthedRequest, res) => {
+  const parsed = z.object({ query: z.string().trim().min(2, 'Enter a company name (2+ characters).').max(200) }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid search query.' });
+  }
+  try {
+    const result = await searchCompany(req.workspaceId!, parsed.data.query);
+    if (!result.found) {
+      return res.status(404).json({ error: result.error || 'Company not found.' });
+    }
+    res.json({ success: true, profile: result.profile });
   } catch (e) {
     handleError(res, e);
   }
@@ -884,6 +887,53 @@ app.post('/api/demo/run', authMiddleware, async (req: AuthedRequest, res) => {
   try {
     const result = await runDemoWorkflow(req.workspaceId!);
     res.json({ success: true, ...result });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+// ---------- 16. Lead Generation (Google Maps) ----------
+app.post('/api/leads/generate', authMiddleware, async (req: AuthedRequest, res) => {
+  const schema = z.object({
+    serviceOffered: z.string().min(2).max(200),
+    businessCategory: z.string().min(2).max(200),
+    location: z.string().min(2).max(200),
+    maxResults: z.number().int().min(1).max(50).optional().default(20),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'serviceOffered, businessCategory, and location are required.' });
+
+  try {
+    const result = await generateLeads(parsed.data, req.workspaceId!);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+app.get('/api/leads/:id/pitches/:pitchId/copy-gmail', authMiddleware, async (req: AuthedRequest, res) => {
+  try {
+    const { id, pitchId } = req.params;
+    const leadRes = await query(`SELECT * FROM leads WHERE id = $1 AND workspace_id = $2`, [id, req.workspaceId]);
+    if (leadRes.rows.length === 0) return res.status(404).json({ error: 'Lead not found' });
+    const lead = leadRes.rows[0];
+
+    const pitches = Array.isArray(lead.lead_pitches) ? lead.lead_pitches : [];
+    const pitch = pitches.find((p: any) => p.id === pitchId);
+    if (!pitch) return res.status(404).json({ error: 'Pitch not found' });
+
+    // Check if the lead has a gmail address
+    if (!lead.has_gmail || !lead.contact_email) {
+      return res.status(400).json({ error: 'No Gmail address available for this lead.' });
+    }
+
+    // Build a Gmail compose URL with pre-filled subject and body
+    const subject = encodeURIComponent(pitch.subject);
+    const body = encodeURIComponent(pitch.pitch);
+    const to = encodeURIComponent(lead.contact_email);
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${to}&su=${subject}&body=${body}&fs=1`;
+
+    res.json({ success: true, gmailUrl, to: lead.contact_email });
   } catch (e) {
     handleError(res, e);
   }

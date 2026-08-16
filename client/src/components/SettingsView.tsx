@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Save, Mail, Calendar as CalendarIcon, Globe, BrainCircuit, LogOut, CheckCircle2, XCircle, KeyRound, MessageCircle } from 'lucide-react';
+import { Save, Mail, Calendar as CalendarIcon, Globe, BrainCircuit, CheckCircle2, XCircle, KeyRound, MessageCircle } from 'lucide-react';
 import { PageHeader, Card, Button, Toggle, Chip, cx, Input } from './ui';
 
 export function SettingsView(props: {
   settings: any;
   user: any;
   onUpdate: (data: any) => void;
-  onLogout: () => void;
+  onLogout?: () => void;
 }) {
   const ws = props.settings?.workspace || {};
   const env = props.settings?.environment || {};
@@ -148,12 +148,9 @@ export function SettingsView(props: {
         </Card>
 
         <Card title="Account">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[14px] font-semibold text-textPrimary">{props.user?.name}</div>
-              <div className="text-[12px] text-textSecondary mt-0.5">{props.user?.email}</div>
-            </div>
-            <Button variant="secondary" onClick={props.onLogout}><LogOut className="w-4 h-4" /> Log out</Button>
+          <div>
+            <div className="text-[14px] font-semibold text-textPrimary">{props.user?.name}</div>
+            <div className="text-[12px] text-textSecondary mt-0.5">{props.user?.email}</div>
           </div>
         </Card>
       </div>

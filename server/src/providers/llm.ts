@@ -39,13 +39,18 @@ function safeParse(content: string): any {
 export async function executeLLM(
   systemPrompt: string,
   userPrompt: string,
-  returnJson: boolean = true
+  returnJson: boolean = true,
+  timeoutMs?: number
 ): Promise<any> {
+  const primaryTimeout = timeoutMs ?? 9000;
+  const miniTimeout = timeoutMs ?? 8000;
+  const geminiTimeout = timeoutMs ?? 10000;
+
   // Tier 1: Groq Llama 3.3 70B
   if (groqApiKey) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 9000);
+      const timeoutId = setTimeout(() => controller.abort(), primaryTimeout);
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${groqApiKey}` },
@@ -79,7 +84,7 @@ export async function executeLLM(
   if (groqApiKey) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), miniTimeout);
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${groqApiKey}` },
@@ -113,7 +118,7 @@ export async function executeLLM(
   if (geminiApiKey) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), geminiTimeout);
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`;
       const res = await fetch(url, {
         method: 'POST',

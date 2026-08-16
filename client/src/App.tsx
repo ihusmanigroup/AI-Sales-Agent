@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  LayoutDashboard, Users, Kanban, Building2, Target, Mail, Calendar,
-  Activity, ScrollText, Settings, LogOut, Play, Bot,
-  Menu, PanelLeftClose, PanelLeftOpen, ChevronDown
+  LayoutDashboard, Kanban, Building2, Target, Mail, Calendar,
+  Activity, ScrollText, Settings, Play, Bot,
+  Menu, PanelLeftClose, PanelLeftOpen, ChevronDown, Sparkles
 } from 'lucide-react';
 import { api, extractError } from './api';
-import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
-import { LeadsPage } from './components/LeadsPage';
 import { LeadDetail } from './components/LeadDetail';
+import { GenerateLeadsPage } from './components/GenerateLeadsPage';
 import { PipelineView } from './components/PipelineView';
 import { CompanyView } from './components/CompanyView';
 import { IcpWizard } from './components/IcpWizard';
@@ -19,11 +18,11 @@ import { AuditLogsView } from './components/AuditLogsView';
 import { SettingsView } from './components/SettingsView';
 import { cx, Avatar, Dropdown, StatusPill, Tooltip, useToast } from './components/ui';
 
-type View = 'overview' | 'leads' | 'leadDetail' | 'pipeline' | 'company' | 'icp' | 'outreach' | 'meetings' | 'activity' | 'logs' | 'settings';
+type View = 'overview' | 'leadDetail' | 'pipeline' | 'company' | 'icp' | 'outreach' | 'meetings' | 'activity' | 'logs' | 'settings' | 'generate-leads';
 
 const PRIMARY_NAV: Array<{ id: View; label: string; icon: any }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'leads', label: 'Leads', icon: Users },
+  { id: 'generate-leads', label: 'Generate Leads', icon: Sparkles },
   { id: 'pipeline', label: 'Pipeline', icon: Kanban },
   { id: 'company', label: 'Company', icon: Building2 },
   { id: 'icp', label: 'ICP', icon: Target },
@@ -39,6 +38,7 @@ const ADVANCED_NAV: Array<{ id: View; label: string; icon: any }> = [
 
 const VIEW_META: Record<View, { title: string; subtitle?: string }> = {
   overview: { title: 'Overview', subtitle: 'Your AI sales operation at a glance' },
+  'generate-leads': { title: 'Generate Leads', subtitle: 'Find targeted prospects using Google Maps data' },
   leads: { title: 'Leads', subtitle: 'Every company your AI has discovered' },
   leadDetail: { title: 'Lead Intelligence', subtitle: 'Evidence, people, and outreach for one company' },
   pipeline: { title: 'Pipeline', subtitle: 'Move leads from discovery to conversion' },
@@ -52,10 +52,9 @@ const VIEW_META: Record<View, { title: string; subtitle?: string }> = {
 };
 
 export default function App() {
-  const [authReady, setAuthReady] = useState(false);
-  const [authUser, setAuthUser] = useState<any>(null);
-  const [workspace, setWorkspace] = useState<any>(null);
+  const [workspace] = useState<any>({ id: 'default', name: 'IH Sales Agent Workspace' });
   const [settings, setSettings] = useState<any>(null);
+  const [authUser] = useState({ id: 'demo', name: 'IH Sales Agent Admin', email: 'admin@ihsalesagent.ai', role: 'admin' });
 
   const [view, setView] = useState<View>('overview');
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
@@ -72,13 +71,13 @@ export default function App() {
   const [agentStatus, setAgentStatus] = useState<string>('Autonomous Agent Ready');
   const [appError, setAppError] = useState<string>('');
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('agenthack_sidebar') === 'collapsed');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('ihsalesagent_sidebar') === 'collapsed');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const toast = useToast();
 
-  const [companyName, setCompanyName] = useState('FlyRank');
-  const [companyText, setCompanyText] = useState('FlyRank is an all-in-one platform for organic and AI search growth. It automates keyword discovery, AI content production, publishing, instant Google indexation, and technical SEO audits. Core offerings include Generative Engine Optimization (GEO/AEO), schema markup, and llms.txt configurations so brands get cited by ChatGPT, Perplexity, Gemini, and Claude. Pricing starts at $1,499/mo.');
+  const [companyName, setCompanyName] = useState('');
+  const [companyText, setCompanyText] = useState('');
   const [icpForm, setIcpForm] = useState({
     location: 'Pakistan',
     industry: 'Hospital',
@@ -91,7 +90,7 @@ export default function App() {
 
   const toggleSidebar = () => {
     setSidebarCollapsed((c) => {
-      localStorage.setItem('agenthack_sidebar', c ? 'expanded' : 'collapsed');
+      localStorage.setItem('ihsalesagent_sidebar', c ? 'expanded' : 'collapsed');
       return !c;
     });
   };
@@ -128,71 +127,10 @@ export default function App() {
   }, [selectedLeadId]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const token = api.getToken();
-      if (!token) {
-        setAuthReady(true);
-        return;
-      }
-      try {
-        const me = await api.me();
-        if (cancelled) return;
-        setAuthUser(me.user);
-        setWorkspace(me.workspace);
-      } catch {
-        api.clearToken();
-        if (!cancelled) setAuthUser(null);
-      }
-      setAuthReady(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!authUser) return;
     refreshData();
     const interval = setInterval(() => refreshData({ quiet: true }), 5000);
     return () => clearInterval(interval);
-  }, [authUser, selectedLeadId, refreshData]);
-
-  const handleLogin = async (email: string, password: string) => {
-    setLoading(true);
-    try {
-      const data = await api.login(email, password);
-      api.setToken(data.token);
-      setAuthUser(data.user);
-      setWorkspace(data.workspace);
-      toast('success', 'Signed in', `Welcome back, ${data.user?.name?.split(' ')[0] || 'Admin'}.`);
-    } catch (err) {
-      toast('error', 'Sign in failed', extractError(err));
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDemoLogin = async () => {
-    setLoading(true);
-    try {
-      const data = await api.demoLogin();
-      api.setToken(data.token);
-      setAuthUser(data.user);
-      setWorkspace(data.workspace);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    try { await api.logout(); } catch { /* ignore */ }
-    api.clearToken();
-    setAuthUser(null);
-    setWorkspace(null);
-    setView('overview');
-  };
+  }, [selectedLeadId, refreshData]);
 
   const loadLead = async (id: string) => {
     setSelectedLeadId(id);
@@ -242,17 +180,21 @@ export default function App() {
     }, 'Running lead discovery...');
   };
 
-  if (!authReady) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background text-textPrimary">
-        <span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  const handleGenerateLeads = async (serviceOffered: string, businessCategory: string, location: string, maxResults?: number) => {
+    return await withBusy(async () => {
+      setAgentStatus('Searching Google Maps for companies...');
+      const res = await api.generateLeads(serviceOffered, businessCategory, location, maxResults);
+      setAgentStatus(`Found ${res.totalGenerated} leads from ${res.source}. ${res.websiteChecks} website checks completed.`);
+      toast('success', 'Leads generated', `${res.totalGenerated} leads found from ${res.source}. ${res.websiteChecks} website checks performed.`);
+      await refreshData({ quiet: true });
+      return res;
+    }, 'Generating leads...');
+  };
 
-  if (!authUser) {
-    return <Login onLogin={handleLogin} onDemoLogin={handleDemoLogin} loading={loading} />;
-  }
+  const handleCopyToGmail = async (leadId: string, pitchId: string) => {
+    const res = await api.copyPitchToGmail(leadId, pitchId);
+    window.open(res.gmailUrl, '_blank', 'noopener,noreferrer');
+  };
 
   const env = settings?.environment || {};
   const isDemo = env.demoMode || false;
@@ -299,7 +241,7 @@ export default function App() {
           </div>
           {!collapsed && (
             <div className="min-w-0">
-              <div className="font-bold text-[15px] text-textPrimary tracking-tight leading-tight">AgentHack</div>
+              <div className="font-bold text-[15px] text-textPrimary tracking-tight leading-tight">IH Sales Agent</div>
               <div className="text-[11px] text-textSecondary">AI Sales Operations</div>
             </div>
           )}
@@ -359,9 +301,6 @@ export default function App() {
             <Avatar name={authUser.name} size="sm" />
             {!collapsed && <span className="truncate text-[11px] text-textSecondary">{authUser.name}</span>}
           </div>
-          <button onClick={handleLogout} title="Log out" className="text-textSecondary hover:text-danger transition-colors p-1">
-            <LogOut className="w-4 h-4" />
-          </button>
         </div>
       </div>
     </>
@@ -444,12 +383,6 @@ export default function App() {
                   >
                     <Activity className="w-4 h-4 text-textSecondary" /> Agent Activity
                   </button>
-                  <button
-                    onClick={() => { close(); handleLogout(); }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium text-red-300 hover:bg-danger/10 transition-colors"
-                  >
-                    <LogOut className="w-4 h-4" /> Log out
-                  </button>
                 </div>
               )}
             </Dropdown>
@@ -467,39 +400,22 @@ export default function App() {
               isDemo={isDemo}
               integrations={integrations}
               userName={authUser.name}
-              onRunDiscovery={() => runDiscovery('leads')}
+              onRunDiscovery={() => runDiscovery('overview')}
               onSelectLead={openLeadDetail}
               onViewPipeline={() => setView('pipeline')}
-              onViewLeads={() => setView('leads')}
               onViewMeetings={() => setView('meetings')}
               onViewActivity={() => setView('activity')}
-            />
-          )}
+              onGenerateLeads={() => setView('generate-leads')}
+         />
+           )}
 
-          {view === 'leads' && (
-            <LeadsPage
-              leadsList={leadsList}
-              loading={loading}
-              onSelectLead={openLeadDetail}
-              onReRunDiscovery={async () => {
-                await withBusy(async () => {
-                  const disc = await api.discoverLeads();
-                  await refreshData({ quiet: true });
-                  toast('success', 'Discovery complete', `${disc?.candidatesCount ?? '?'} candidates scanned.`);
-                  const top = (disc?.leads || []).find((l: any) => l.stage !== 'Not Qualified') || disc?.leads?.[0];
-                  if (top) await openLeadDetail(top.id);
-                }, 'Re-running discovery & cheap filter...');
-              }}
-            />
-          )}
-
-          {view === 'leadDetail' && leadDetail && (
-            <LeadDetail
-              lead={leadDetail}
-              loading={loading}
-              integrations={integrations}
-              isDemo={isDemo}
-              onBack={() => setView('leads')}
+           {view === 'leadDetail' && leadDetail && (
+             <LeadDetail
+               lead={leadDetail}
+               loading={loading}
+               integrations={integrations}
+               isDemo={isDemo}
+               onBack={() => setView('generate-leads')}
               onRefresh={async () => loadLead(leadDetail.id)}
               onRunResearch={async () => {
                 await withBusy(async () => {
@@ -600,7 +516,16 @@ export default function App() {
             />
           )}
 
-          {view === 'company' && (
+          {view === 'generate-leads' && (
+          <GenerateLeadsPage
+            loading={loading}
+            agentStatus={agentStatus}
+            onGenerateLeads={handleGenerateLeads}
+            onCopyToGmail={handleCopyToGmail}
+          />
+        )}
+
+        {view === 'company' && (
             <CompanyView
               companyName={companyName}
               setCompanyName={setCompanyName}
@@ -720,7 +645,6 @@ export default function App() {
                   toast('success', 'Settings saved');
                 });
               }}
-              onLogout={handleLogout}
             />
           )}
         </main>

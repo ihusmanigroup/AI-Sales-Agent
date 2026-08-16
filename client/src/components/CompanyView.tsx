@@ -20,7 +20,8 @@ import {
   BookOpen,
   Loader2,
   FileWarning,
-  Search
+  Search,
+  Globe
 } from 'lucide-react';
 import { PageHeader, Card, Button, Notice, Chip, Collapsible, cx, ConfirmModal, Drawer, ErrorBanner } from './ui';
 import { api, extractError } from '../api';
@@ -81,14 +82,23 @@ function validateFile(f: File): string | null {
   return null;
 }
 
-function ListSection({ icon, title, items, empty }: { icon: ReactNode; title: string; items: any[]; empty: string }) {
+function ListSection({ icon, title, items, empty, chips }: { icon: ReactNode; title: string; items: any[]; empty: string; chips?: boolean }) {
   return (
-    <div className="border border-muted rounded-xl p-4">
+    <div className="border border-muted rounded-xl p-4 bg-white/[0.015]">
       <div className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wide text-textSecondary mb-3">
-        {icon} {title}
+        <span className="w-6 h-6 rounded-lg bg-white/[0.04] border border-muted flex items-center justify-center">{icon}</span>
+        {title}
       </div>
       {(!items || items.length === 0) ? (
-        <div className="text-[13px] text-textSecondary">{empty}</div>
+        <div className="text-[13px] text-textSecondary italic">{empty}</div>
+      ) : chips ? (
+        <div className="flex flex-wrap gap-2">
+          {items.map((it, i) => (
+            <Chip key={i} tone="neutral">
+              {typeof it === 'string' ? it : it.name || it.title || JSON.stringify(it)}
+            </Chip>
+          ))}
+        </div>
       ) : (
         <ul className="space-y-2">
           {items.map((it, i) => (
@@ -136,6 +146,11 @@ export function CompanyView(props: {
   const [askLoading, setAskLoading] = useState(false);
   const [askResult, setAskResult] = useState<any | null>(null);
   const [askError, setAskError] = useState<string>('');
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string>('');
+  const [searchSuccess, setSearchSuccess] = useState<string>('');
 
   useEffect(() => {
     return () => {
@@ -262,6 +277,22 @@ export function CompanyView(props: {
     setAskLoading(false);
   };
 
+  const handleSearch = async () => {
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+    setSearchLoading(true);
+    setSearchError('');
+    setSearchSuccess('');
+    try {
+      const res = await api.searchCompany(q);
+      setSearchSuccess(`"${res.profile?.name || q}" researched and added as your current company knowledge.`);
+      await props.onRefresh();
+    } catch (e) {
+      setSearchError(extractError(e));
+    }
+    setSearchLoading(false);
+  };
+
   const profile = props.companyProfile;
   const busy = phase === 'uploading' || phase === 'processing';
   const currentStepIdx = STEP_LABELS[step] ? STEPS.findIndex((s) => STEP_LABELS[s.key] === STEP_LABELS[step]) : -1;
@@ -289,6 +320,41 @@ export function CompanyView(props: {
           </Notice>
         </div>
       )}
+
+      <Card className="mb-6" title="Research a company from the web">
+        <div className="flex flex-wrap gap-2.5">
+          <div className="flex-1 min-w-[240px]">
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+              placeholder="Search any company by name or website — e.g. Stripe, Airbnb"
+              className="w-full px-3 py-2 bg-elevated border border-muted rounded-lg text-[13px] text-textPrimary focus:outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/15 transition-all"
+            />
+          </div>
+          <Button onClick={handleSearch} loading={searchLoading}>
+            <Search className="w-4 h-4" /> Research company
+          </Button>
+        </div>
+        {searchError && (
+          <div className="mt-3">
+            <ErrorBanner message={searchError} />
+          </div>
+        )}
+        {searchSuccess && (
+          <div className="mt-3">
+            <Notice tone="success">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{searchSuccess}</span>
+              </div>
+            </Notice>
+          </div>
+        )}
+        <div className="mt-3 text-[12px] text-textSecondary flex items-center gap-1.5">
+          <Globe className="w-3.5 h-3.5" /> Searches the web with live results. If the company can't be verified, you'll see a clear "not found" message instead of made-up data.
+        </div>
+      </Card>
 
       <Card className="mb-6" title="Upload Company Knowledge">
         <div
@@ -432,20 +498,27 @@ export function CompanyView(props: {
             <div className="flex flex-wrap items-center gap-3 mb-4">
               <h2 className="text-xl font-bold text-textPrimary">{profile.name}</h2>
               {profile.tagline && profile.tagline !== profile.name && <span className="text-[13px] text-textSecondary italic">{profile.tagline}</span>}
+              {profile.website && (
+                <a href={profile.website.startsWith('http') ? profile.website : `https://${profile.website}`} target="_blank" rel="noopener noreferrer" className="text-[12px] text-primary hover:underline flex items-center gap-1">
+                  <Globe className="w-3 h-3" /> {profile.website}
+                </a>
+              )}
+              <Chip tone="neutral" className="text-[10px]">{profile.source_type || 'PDF'}</Chip>
+              {profile.chunk_count && <Chip tone="ai" className="text-[10px]">{profile.chunk_count} chunks</Chip>}
             </div>
-            <p className="text-[14px] text-textPrimary leading-relaxed">{profile.summary || 'Not available in company knowledge'}</p>
+            <p className="text-[14px] text-textPrimary leading-relaxed">{profile.summary || 'Not captured from the company knowledge yet.'}</p>
           </Card>
 
           <div className="grid md:grid-cols-2 gap-6 mb-6">
-            <ListSection icon={<Boxes className="w-3.5 h-3.5 text-primary" />} title="Services & capabilities" items={profile.offerings} empty="Not available in company knowledge" />
-            <ListSection icon={<Target className="w-3.5 h-3.5 text-secondary" />} title="Industries" items={profile.target_industries} empty="Not available in company knowledge" />
-            <ListSection icon={<Award className="w-3.5 h-3.5 text-success" />} title="Case studies & results" items={profile.case_studies} empty="Not available in company knowledge" />
-            <ListSection icon={<Wrench className="w-3.5 h-3.5 text-warning" />} title="Technologies & stack" items={profile.tech_stack} empty="Not available in company knowledge" />
-            <ListSection icon={<BadgeDollarSign className="w-3.5 h-3.5 text-primary" />} title="Pricing & packages" items={profile.pricing} empty="Not available in company knowledge" />
-            <ListSection icon={<AlertTriangle className="w-3.5 h-3.5 text-danger" />} title="Limitations & boundaries" items={profile.limitations} empty="Not available in company knowledge" />
+            <ListSection icon={<Boxes className="w-3.5 h-3.5 text-primary" />} title="Services & capabilities" items={profile.offerings} empty="Not captured from the company knowledge yet." chips />
+            <ListSection icon={<Target className="w-3.5 h-3.5 text-secondary" />} title="Industries" items={profile.target_industries} empty="Not captured from the company knowledge yet." chips />
+            <ListSection icon={<Award className="w-3.5 h-3.5 text-success" />} title="Case studies & results" items={profile.case_studies} empty="Not captured from the company knowledge yet." />
+            <ListSection icon={<Wrench className="w-3.5 h-3.5 text-warning" />} title="Technologies & stack" items={profile.tech_stack} empty="Not captured from the company knowledge yet." chips />
+            <ListSection icon={<BadgeDollarSign className="w-3.5 h-3.5 text-primary" />} title="Pricing & packages" items={profile.pricing} empty="Not captured from the company knowledge yet." />
+            <ListSection icon={<AlertTriangle className="w-3.5 h-3.5 text-danger" />} title="Limitations & boundaries" items={profile.limitations} empty="Not captured from the company knowledge yet." />
           </div>
 
-          <Card title="Ask Company Knowledge" className="mb-6">
+          <Card title={`Ask Company Knowledge — ${profile.name}`} className="mb-6">
             <div className="flex flex-wrap gap-2.5">
               <div className="flex-1 min-w-[240px]">
                 <input

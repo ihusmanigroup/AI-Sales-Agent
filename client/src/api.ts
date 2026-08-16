@@ -24,7 +24,6 @@ export const api = {
 
   // auth
   login: (email: string, password: string) => http.post('/auth/login', { email, password }).then((r) => r.data),
-  demoLogin: () => http.post('/auth/demo-login').then((r) => r.data),
   logout: () => http.post('/auth/logout').then((r) => r.data),
   me: () => http.get('/auth/me').then((r) => r.data),
 
@@ -50,6 +49,7 @@ export const api = {
   deleteDocument: (id: string) => http.delete(`/company/documents/${id}`).then((r) => r.data),
   getDocumentChunks: (id: string) => http.get(`/company/documents/${id}/chunks`).then((r) => r.data),
   askCompany: (question: string) => http.post('/company/ask', { question }).then((r) => r.data),
+  searchCompany: (query: string) => http.post('/company/search', { query }).then((r) => r.data),
 
   // icp
   createICP: (data: any) => http.post('/icp', data).then((r) => r.data),
@@ -71,6 +71,9 @@ export const api = {
   resumeFollowUp: (id: string) => http.post(`/leads/${id}/followup/resume`).then((r) => r.data),
   cancelFollowUp: (id: string, reason?: string) => http.post(`/leads/${id}/followup/cancel`, { reason }).then((r) => r.data),
   setDnc: (id: string, value: boolean, reason?: string) => http.post(`/leads/${id}/dnc`, { value, reason }).then((r) => r.data),
+  generateLeads: (serviceOffered: string, businessCategory: string, location: string, maxResults?: number) =>
+    http.post('/leads/generate', { serviceOffered, businessCategory, location, maxResults }).then((r) => r.data),
+  copyPitchToGmail: (leadId: string, pitchId: string) => http.get(`/leads/${leadId}/pitches/${pitchId}/copy-gmail`).then((r) => r.data),
 
   // pipeline
   getPipeline: () => http.get('/pipeline').then((r) => r.data),

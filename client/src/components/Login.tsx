@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
-import { Bot, LogIn, Zap, Sparkles, ShieldCheck, Cpu } from 'lucide-react';
+import { Bot, LogIn, Sparkles, ShieldCheck, Cpu } from 'lucide-react';
 
-export const Login: React.FC<{ onLogin: (email: string, password: string) => Promise<void>; onDemoLogin: () => Promise<void>; loading: boolean }> = ({
+export const Login: React.FC<{ onLogin: (email: string, password: string) => Promise<void>; loading: boolean }> = ({
   onLogin,
-  onDemoLogin,
   loading,
 }) => {
-  const [email, setEmail] = useState('admin@agenthack.ai');
-  const [password, setPassword] = useState('agenthack2026');
+  const [email, setEmail] = useState('admin@ihsalesagent.ai');
+  const [password, setPassword] = useState('ihsalesagent2026');
   const [error, setError] = useState('');
 
   const submit = async (e: React.FormEvent) => {
@@ -38,7 +37,7 @@ export const Login: React.FC<{ onLogin: (email: string, password: string) => Pro
             <Bot className="w-5 h-5 text-white" />
           </div>
           <div>
-            <div className="font-bold text-lg tracking-tight">AgentHack</div>
+            <div className="font-bold text-lg tracking-tight">IH Sales Agent</div>
             <div className="text-[12px] text-textSecondary">AI Sales Operations</div>
           </div>
         </div>
@@ -64,7 +63,7 @@ export const Login: React.FC<{ onLogin: (email: string, password: string) => Pro
           </div>
         </div>
 
-        <div className="relative text-[11px] text-textMuted">AgentHack · Autonomous AI Sales Operations</div>
+        <div className="relative text-[11px] text-textMuted">IH Sales Agent · Autonomous AI Sales Operations</div>
       </div>
 
       {/* RIGHT PANEL */}
@@ -75,7 +74,7 @@ export const Login: React.FC<{ onLogin: (email: string, password: string) => Pro
               <Bot className="w-7 h-7 text-white" />
             </div>
             <div>
-              <div className="font-bold text-lg tracking-tight">AgentHack</div>
+<div className="font-bold text-lg tracking-tight">IH Sales Agent</div>
               <div className="text-[13px] text-textSecondary mt-1">AI Sales Operations</div>
             </div>
           </div>
@@ -115,17 +114,7 @@ export const Login: React.FC<{ onLogin: (email: string, password: string) => Pro
               {loading ? <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <LogIn className="w-4 h-4" />}
               Sign In
             </button>
-            <button
-              type="button"
-              onClick={onDemoLogin}
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-2.5 bg-white/[0.04] hover:bg-white/[0.08] text-textSecondary hover:text-textPrimary border border-muted rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-50"
-            >
-              <Zap className="w-4 h-4 text-warning" /> Quick demo sign-in
-            </button>
           </form>
-
-          <p className="text-center text-[11px] text-textMuted">admin@agenthack.ai · agenthack2026</p>
         </div>
       </div>
     </div>
